@@ -92,5 +92,6 @@ Configs and themes are saved in `workspace/SleekUI/` with your executor's file f
 
 - **Notifications**: hovering one pauses its timer, the `x` (or a click) closes it, and the same notification sent again shows `x2`, `x3` instead of stacking.
 - **Key conflicts**: binding a key that another feature already uses shows a warning naming that feature. Turn it off with `Library.KeyConflictWarnings = false`.
+- **Custom cursor**: a small solid arrow in the theme's accent colour replaces the system pointer, only while the menu is open. Set `Library.CursorColor = Color3.new(0, 0, 0)` before `CreateWindow` for a fixed colour instead. Switch it off in Settings, with `Window:SetCursor(false)`, or with `Cursor = false` in `CreateWindow`.
 - **Scroll edge fades**: a page with more content above or below fades out softly at that edge instead of cutting rows off.
 - **Dim background**: the game darkens slightly while the menu is open. Switch it off in Settings, with `Window:SetDim(false)`, or with `Dim = false` in `CreateWindow`.

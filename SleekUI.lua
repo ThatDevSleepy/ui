@@ -27,6 +27,8 @@
 	  Window:AddSettingsPage{ Title }    -> Menu / Configs / Theme
 	  Window:SetOpen(bool)  Window:SetToggleKey(key)  Window:SetScale(n)  Window:Center()
 	  Window:SetDim(bool)            darken the game behind the open menu (also a switch in Settings)
+	  Window:SetCursor(bool)         small arrow cursor in the accent color, only while the menu is open (Cursor = false in CreateWindow)
+	                                 Library.CursorColor = Color3.new(0, 0, 0) before CreateWindow for a fixed color instead
 	  search box in the top left (Ctrl+F) searches every page; click a result to jump to it
 	  click a section header to collapse it
 
@@ -132,8 +134,25 @@ local FontPresets = {
 	SourceSans  = { "SourceSansSemibold", "SourceSansBold" },
 	Arial       = { "Arial", "ArialBold" },
 	Ubuntu      = { "Ubuntu", "Ubuntu" },
+	-- Styled fonts, named after Discord's display-name styles. Roblox can only draw its own
+	-- built-in fonts, so each name uses the closest built-in one, not Discord's actual font file.
+	-- Most have a single weight, so regular and bold are the same font.
+	Tempo       = { "Merriweather", "Merriweather" },       -- serif
+	Sakura      = { "FredokaOne", "FredokaOne" },           -- soft and rounded
+	Jellybean   = { "DenkOne", "DenkOne" },                 -- chunky and bouncy
+	Modern      = { "Jura", "Jura" },                       -- thin geometric
+	Medieval    = { "GrenzeGotisch", "GrenzeGotisch" },     -- blackletter
+	["8bit"]    = { "Arcade", "Arcade" },                   -- pixel (runs wide)
+	Vampyre     = { "Creepster", "Creepster" },             -- horror
+	["Monkey Bars"] = { "LuckiestGuy", "LuckiestGuy" },     -- playful capitals
+	Mainframe   = { "RobotoMono", "RobotoMono" },           -- terminal monospace
+	Headbang    = { "Bangers", "Bangers" },                 -- loud poster capitals
+	Journal     = { "PatrickHand", "PatrickHand" },         -- handwriting
 }
-local FontOrder = { "Gotham", "BuilderSans", "Montserrat", "SourceSans", "Arial", "Ubuntu" }
+local FontOrder = {
+	"Gotham", "BuilderSans", "Montserrat", "SourceSans", "Arial", "Ubuntu",
+	"Tempo", "Sakura", "Jellybean", "Modern", "Medieval", "8bit", "Vampyre", "Monkey Bars", "Mainframe", "Headbang", "Journal",
+}
 local function fontEnum(name, fallback)
 	local ok, f = pcall(function() return Enum.Font[name] end)
 	return ok and f or fallback
@@ -169,16 +188,19 @@ local TEXT_CLASSES = { TextLabel = true, TextButton = true, TextBox = true }
 
 local function create(class, props, children)
 	local inst = Instance.new(class)
-	local parent, themed
+	local parent, themed, bold
 	for k, v in pairs(props or {}) do
 		if k == "Parent" then parent = v
 		elseif k == "Themed" then themed = v
+		elseif k == "Bold" then bold = v
 		else inst[k] = v end
 	end
-	-- every text object follows the theme font automatically
+	-- every text object follows the theme font automatically. Bold = true asks for the theme's
+	-- bold font; it is a flag and not a font comparison because single-weight fonts use the same
+	-- font for both, and comparing would remember every label built under one as bold.
 	if TEXT_CLASSES[class] and not (themed and themed.Font) then
 		themed = themed and table.clone(themed) or {}
-		themed.Font = (inst.Font == Theme.FontBold) and "FontBold" or "Font"
+		themed.Font = bold and "FontBold" or "Font"
 	end
 	if themed then
 		for prop, key in pairs(themed) do inst[prop] = Theme[key] end
@@ -962,7 +984,7 @@ function Library:Notify(o)
 		}, { corner(4) })
 	end
 	textLabel({
-		Position = UDim2.fromOffset(24, 0), Size = UDim2.new(1, -74, 1, 0), Text = title, Font = Theme.FontBold, TextSize = 14,
+		Position = UDim2.fromOffset(24, 0), Size = UDim2.new(1, -74, 1, 0), Text = title, Bold = true, TextSize = 14,
 		TextTruncate = Enum.TextTruncate.AtEnd, Parent = head,
 	})
 	-- "x2", "x3"... shown once the same notification repeats
@@ -972,7 +994,7 @@ function Library:Notify(o)
 	})
 	local closeBtn = create("TextButton", {
 		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 4, 0.5, 0), Size = UDim2.fromOffset(20, 20),
-		BackgroundTransparency = 1, AutoButtonColor = false, Text = "x", TextSize = 13, Font = Theme.FontBold,
+		BackgroundTransparency = 1, AutoButtonColor = false, Text = "x", TextSize = 13, Bold = true,
 		Themed = { TextColor3 = "SubText" }, Parent = head,
 	})
 	-- text on the left, live countdown on the right
@@ -1119,7 +1141,7 @@ function Library:OpenContextMenu(title, items)
 	menu.MouseLeave:Connect(function() hg:clear() end)
 
 	if title then
-		local head = textLabel({ Size = UDim2.new(1, 0, 0, 22), Text = string.upper(title), Font = Theme.FontBold, TextSize = 11, LayoutOrder = 0, Themed = { TextColor3 = "SubText" }, Parent = menu })
+		local head = textLabel({ Size = UDim2.new(1, 0, 0, 22), Text = string.upper(title), Bold = true, TextSize = 11, LayoutOrder = 0, Themed = { TextColor3 = "SubText" }, Parent = menu })
 		padding(0, 8, 0, 0).Parent = head
 	end
 
@@ -1209,7 +1231,7 @@ function Library:Dialog(o)
 		Themed = { BackgroundColor3 = "Card" }, Parent = shell,
 	}, { corner(9), padding(16, 18, 16, 18), list(8) })
 
-	textLabel({ Size = UDim2.new(1, 0, 0, 20), Text = o.Title or "Are you sure?", Font = Theme.FontBold, TextSize = 15, LayoutOrder = 1, Parent = card })
+	textLabel({ Size = UDim2.new(1, 0, 0, 20), Text = o.Title or "Are you sure?", Bold = true, TextSize = 15, LayoutOrder = 1, Parent = card })
 	if o.Text then
 		textLabel({
 			Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Text = o.Text, TextSize = 13, TextWrapped = true,
@@ -1310,7 +1332,7 @@ function Library:CreateKeybindList(o)
 		Themed = { BackgroundColor3 = "Card" }, Parent = gui,
 	}, { corner(8), stroke(), padding(8, 10, 8, 10), list(4) })
 	local header = create("Frame", { Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1, LayoutOrder = 0, Parent = frame })
-	textLabel({ Size = UDim2.fromScale(1, 1), Text = "KEYBINDS", Font = Theme.FontBold, TextSize = 11, Themed = { TextColor3 = "SubText" }, Parent = header })
+	textLabel({ Size = UDim2.fromScale(1, 1), Text = "KEYBINDS", Bold = true, TextSize = 11, Themed = { TextColor3 = "SubText" }, Parent = header })
 	local countLabel = textLabel({
 		AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.new(0, 40, 1, 0), Text = "0",
 		TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right, Themed = { TextColor3 = "Accent" }, Parent = header,
@@ -1906,7 +1928,7 @@ function Library:_optionsPopup(ownerSection, slot, title, build, layoutOrder)
 	}, { corner(8), stroke() })
 	-- no UIScale pop here: it made the text grow from small to big. The card simply appears at
 	-- full size (its contents are live controls, so a fade could leave them half-transparent)
-	textLabel({ Position = UDim2.fromOffset(14, 8), Size = UDim2.new(1, -28, 0, 18), Text = string.upper(title), Font = Theme.FontBold, TextSize = 11, Themed = { TextColor3 = "SubText" }, Parent = popup })
+	textLabel({ Position = UDim2.fromOffset(14, 8), Size = UDim2.new(1, -28, 0, 18), Text = string.upper(title), Bold = true, TextSize = 11, Themed = { TextColor3 = "SubText" }, Parent = popup })
 	local content = create("Frame", {
 		Position = UDim2.fromOffset(6, 30), Size = UDim2.new(1, -12, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Parent = popup,
 	}, { list(4), padding(0, 0, 8, 0) })
@@ -2201,7 +2223,7 @@ function Section:AddParagraph(o)
 	local inner = create("Frame", {
 		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Parent = holder,
 	}, { padding(8, 10, 8, 10), list(3) })
-	local title = textLabel({ Size = UDim2.new(1, 0, 0, 16), Text = o.Title or "Paragraph", Font = Theme.FontBold, LayoutOrder = 1, Parent = inner })
+	local title = textLabel({ Size = UDim2.new(1, 0, 0, 16), Text = o.Title or "Paragraph", Bold = true, LayoutOrder = 1, Parent = inner })
 	local body = textLabel({
 		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Text = o.Text or "", TextSize = 12,
 		TextWrapped = true, LayoutOrder = 2, Themed = { TextColor3 = "SubText" }, Parent = inner,
@@ -2217,7 +2239,7 @@ function Section:AddDivider(text)
 	if text then
 		local lbl = textLabel({
 			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(0, 14),
-			AutomaticSize = Enum.AutomaticSize.X, Text = string.upper(text), TextSize = 10, Font = Theme.FontBold,
+			AutomaticSize = Enum.AutomaticSize.X, Text = string.upper(text), TextSize = 10, Bold = true,
 			TextXAlignment = Enum.TextXAlignment.Center, Themed = { TextColor3 = "SubText" }, Parent = row,
 		})
 		padding(0, 8, 0, 8).Parent = lbl
@@ -3142,7 +3164,7 @@ function Section:AddCharacterPreview(o)
 	local boxStroke = create("UIStroke", { Thickness = 1, Color = colors.Box, Parent = espBox })
 	local nameTag = create("TextLabel", {
 		AnchorPoint = Vector2.new(0.5, 1), Size = UDim2.fromOffset(160, 14), BackgroundTransparency = 1, Text = LocalPlayer.DisplayName,
-		TextSize = 12, Font = Theme.FontBold, TextColor3 = colors.Name, TextStrokeTransparency = 0.5, ZIndex = 3, Parent = box,
+		TextSize = 12, Bold = true, TextColor3 = colors.Name, TextStrokeTransparency = 0.5, ZIndex = 3, Parent = box,
 	})
 	local distTag = create("TextLabel", {
 		AnchorPoint = Vector2.new(0.5, 0), Size = UDim2.fromOffset(160, 14), BackgroundTransparency = 1, Text = "0 studs",
@@ -3368,7 +3390,7 @@ function Section:AddPlayerList(o)
 		textLabel({ Position = UDim2.fromOffset(44, 19), Size = UDim2.new(1, -120, 0, 14), Text = "@" .. plr.Name, TextSize = 11, TextTruncate = Enum.TextTruncate.AtEnd, Themed = { TextColor3 = "SubText" }, Parent = b })
 		local tag = textLabel({
 			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -10, 0.5, 0), Size = UDim2.fromOffset(70, 14), TextSize = 11,
-			Font = Theme.FontBold, TextXAlignment = Enum.TextXAlignment.Right, Themed = { Font = "FontBold" }, TextColor3 = Theme.SubText, Parent = b,
+			Bold = true, TextXAlignment = Enum.TextXAlignment.Right, Themed = { Font = "FontBold" }, TextColor3 = Theme.SubText, Parent = b,
 		})
 		local r = { Button = b, Bar = bar, Tag = tag }
 		rows[plr] = r
@@ -3437,7 +3459,7 @@ function Library:CreateLoader(o)
 			Image = asset, ScaleType = Enum.ScaleType.Fit, Themed = { ImageColor3 = "Accent" }, Parent = card,
 		})
 	end
-	textLabel({ Position = UDim2.fromOffset(0, 62), Size = UDim2.new(1, 0, 0, 20), Text = o.Title or "Loading", Font = Theme.FontBold, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Center, Parent = card })
+	textLabel({ Position = UDim2.fromOffset(0, 62), Size = UDim2.new(1, 0, 0, 20), Text = o.Title or "Loading", Bold = true, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Center, Parent = card })
 	local status = textLabel({ Position = UDim2.fromOffset(0, 84), Size = UDim2.new(1, 0, 0, 16), Text = o.Subtitle or "starting...", TextSize = 12, TextXAlignment = Enum.TextXAlignment.Center, Themed = { TextColor3 = "SubText" }, Parent = card })
 	local track = create("Frame", { Position = UDim2.new(0, 30, 0, 116), Size = UDim2.new(1, -60, 0, 4), BorderSizePixel = 0, Themed = { BackgroundColor3 = "Element" }, Parent = card }, { corner(2) })
 	local fill = create("Frame", { Size = UDim2.fromScale(0, 1), BorderSizePixel = 0, Themed = { BackgroundColor3 = "Accent" }, Parent = track }, { corner(2), shade(0, 0.6, 1) })
@@ -3467,6 +3489,72 @@ function Library:CreateLoader(o)
 		end)
 	end
 	return Loader
+end
+
+---------------------------------------------------------------- custom cursor
+-- A small solid arrow that replaces the system pointer, only while the menu is open. It is one
+-- flat colour with no outline: the theme accent (so presets and custom themes recolour it), or
+-- Library.CursorColor = Color3 set before CreateWindow for a fixed colour such as black.
+-- Library.CustomCursor = false (or the switch in Settings / Window:SetCursor(false)) turns it off
+-- and leaves the normal pointer alone.
+function Library:_refreshCursor()
+	local win = self.Window
+	local show = not self.Unloaded and win ~= nil and win._open == true and self.CustomCursor ~= false
+		and UserInputService.MouseEnabled ~= false
+	local cursor = self._cursorFrame
+	if cursor and not cursor.Parent then cursor = nil end -- its gui was destroyed
+	if show and not cursor then
+		local gui = self:_getGui()
+		if not gui then return end
+		-- the tip of the arrow is the top-left corner, so that corner sits exactly on the mouse
+		cursor = create("Frame", {
+			Name = "Cursor", Size = UDim2.fromOffset(10, 16), BackgroundTransparency = 1,
+			Active = false, Visible = false, ZIndex = 1000, Parent = gui,
+		})
+		-- a small solid arrow pointer, drawn as 1px rows (no image file needed, stays sharp):
+		-- each entry is { row, first column, width }
+		local ARROW = {
+			{ 0, 0, 1 }, { 1, 0, 2 }, { 2, 0, 3 }, { 3, 0, 4 }, { 4, 0, 5 }, { 5, 0, 6 }, { 6, 0, 7 }, { 7, 0, 8 },
+			{ 8, 0, 9 }, { 9, 0, 10 }, { 10, 0, 6 },
+			{ 11, 0, 2 }, { 11, 4, 3 }, { 12, 0, 1 }, { 12, 4, 3 }, -- the tail splits off the body
+			{ 13, 5, 3 }, { 14, 5, 3 }, { 15, 6, 1 },
+		}
+		-- one flat colour: the theme accent, or Library.CursorColor when a script sets one
+		local fixed = typeof(self.CursorColor) == "Color3" and self.CursorColor or nil
+		for _, r in ipairs(ARROW) do
+			create("Frame", {
+				Position = UDim2.fromOffset(r[2], r[1]), Size = UDim2.fromOffset(r[3], 1), BorderSizePixel = 0,
+				BackgroundColor3 = fixed, Themed = (not fixed) and { BackgroundColor3 = "Accent" } or nil, Parent = cursor,
+			})
+		end
+		self._cursorFrame = cursor
+		-- follow the mouse; if the game switches its own pointer back on, hide it again
+		connect(RunService.RenderStepped, function()
+			if not cursor.Visible then return end
+			local m = mousePos()
+			cursor.Position = UDim2.fromOffset(m.X, m.Y)
+			pcall(function()
+				if UserInputService.MouseIconEnabled then UserInputService.MouseIconEnabled = false end
+			end)
+		end)
+	end
+	if cursor then
+		if show then
+			local m = mousePos()
+			cursor.Position = UDim2.fromOffset(m.X, m.Y)
+		end
+		cursor.Visible = show
+	end
+	-- hide the system pointer while ours is shown, and put it back exactly as it was after
+	pcall(function()
+		if show then
+			if self._savedMouseIcon == nil then self._savedMouseIcon = UserInputService.MouseIconEnabled end
+			UserInputService.MouseIconEnabled = false
+		elseif self._savedMouseIcon ~= nil then
+			UserInputService.MouseIconEnabled = self._savedMouseIcon
+			self._savedMouseIcon = nil
+		end
+	end)
 end
 
 ---------------------------------------------------------------- window
@@ -3521,7 +3609,7 @@ function Library:CreateWindow(opts)
 		logo.MouseLeave:Connect(function() tween(logoImg, 0.35, { Rotation = 0, Size = UDim2.fromOffset(26, 26) }, Enum.EasingStyle.Back) end)
 	else
 		logo = textLabel({
-			Size = UDim2.new(1, 0, 0, TOP_H + 8), Text = opts.Logo or string.sub(opts.Title or "S", 1, 1), Font = Theme.FontBold,
+			Size = UDim2.new(1, 0, 0, TOP_H + 8), Text = opts.Logo or string.sub(opts.Title or "S", 1, 1), Bold = true,
 			TextSize = 22, TextXAlignment = Enum.TextXAlignment.Center, Themed = { TextColor3 = "Accent" }, Parent = sidebar,
 		})
 	end
@@ -3575,7 +3663,7 @@ function Library:CreateWindow(opts)
 	-- content
 	local content = create("Frame", { Position = UDim2.fromOffset(SIDEBAR_W, 0), Size = UDim2.new(1, -SIDEBAR_W, 1, 0), BackgroundTransparency = 1, Parent = main })
 	local topbar = create("Frame", { Size = UDim2.new(1, 0, 0, TOP_H), BackgroundTransparency = 1, Parent = content })
-	local crumb = textLabel({ AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -16, 0, 0), Size = UDim2.new(1, -260, 1, 0), RichText = true, Font = Theme.FontBold, TextXAlignment = Enum.TextXAlignment.Right, Parent = topbar })
+	local crumb = textLabel({ AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -16, 0, 0), Size = UDim2.new(1, -260, 1, 0), RichText = true, Bold = true, TextXAlignment = Enum.TextXAlignment.Right, Parent = topbar })
 	create("Frame", {
 		Position = UDim2.fromOffset(12, TOP_H), Size = UDim2.new(1, -24, 0, 1), BorderSizePixel = 0, BackgroundTransparency = 0.3,
 		Themed = { BackgroundColor3 = "Stroke" }, Parent = content,
@@ -3662,7 +3750,7 @@ function Library:CreateWindow(opts)
 		Visible = false, Size = UDim2.fromOffset(176, 0), AutomaticSize = Enum.AutomaticSize.Y, ZIndex = 10,
 		Themed = { BackgroundColor3 = "Card" }, Parent = main,
 	}, { corner(8), flyStroke, padding(6), list(2) })
-	local flyHeader = textLabel({ Size = UDim2.new(1, 0, 0, 22), TextSize = 11, Font = Theme.FontBold, LayoutOrder = 0, Themed = { TextColor3 = "SubText" }, Parent = flyout })
+	local flyHeader = textLabel({ Size = UDim2.new(1, 0, 0, 22), TextSize = 11, Bold = true, LayoutOrder = 0, Themed = { TextColor3 = "SubText" }, Parent = flyout })
 	padding(0, 8, 0, 0).Parent = flyHeader
 	local flyOwner = nil
 	local flyHover = false
@@ -3774,9 +3862,17 @@ function Library:CreateWindow(opts)
 		refreshDim()
 	end
 	refreshDim()
+	-- Window:SetCursor(false) keeps the normal system pointer instead of the themed one
+	if opts.Cursor == false then Library.CustomCursor = false end
+	function Window:SetCursor(on)
+		Library.CustomCursor = on and true or false
+		Library:_refreshCursor()
+	end
+	Library:_refreshCursor()
 	function Window:SetOpen(state)
 		Window._open = state
 		refreshDim()
+		Library:_refreshCursor()
 		if state then
 			main.Visible = true
 			uiScale.Scale = targetScale * 0.92
@@ -3885,7 +3981,7 @@ function Library:CreateWindow(opts)
 		ZIndex = 45, ClipsDescendants = true, Themed = { BackgroundColor3 = "Card" }, Parent = main,
 	}, { corner(8), stroke() })
 	local resultsInner = create("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Parent = results }, { padding(6), list(2) })
-	local resultsHead = textLabel({ Size = UDim2.new(1, 0, 0, 20), TextSize = 11, Font = Theme.FontBold, LayoutOrder = 0, Themed = { TextColor3 = "SubText" }, Parent = resultsInner })
+	local resultsHead = textLabel({ Size = UDim2.new(1, 0, 0, 20), TextSize = 11, Bold = true, LayoutOrder = 0, Themed = { TextColor3 = "SubText" }, Parent = resultsInner })
 	padding(0, 8, 0, 0).Parent = resultsHead
 	local resultsHover = false
 	local resultRows = hoverGroup()
@@ -4171,7 +4267,7 @@ function Library:CreateWindow(opts)
 			colorProp = "ImageColor3"
 		else
 			icon = create("TextLabel", {
-				Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = iconStr, Font = Theme.FontBold, TextSize = 18,
+				Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = iconStr, Bold = true, TextSize = 18,
 				TextColor3 = Theme.SubText, Parent = tile,
 			})
 			colorProp = "TextColor3"
@@ -4343,7 +4439,7 @@ function Library:CreateWindow(opts)
 						end
 					end
 					local title = textLabel({
-						Position = UDim2.fromOffset(titleX, 0), Size = UDim2.new(1, -(titleX + 60), 1, 0), Text = string.upper(so.Name), Font = Theme.FontBold, TextSize = 11,
+						Position = UDim2.fromOffset(titleX, 0), Size = UDim2.new(1, -(titleX + 60), 1, 0), Text = string.upper(so.Name), Bold = true, TextSize = 11,
 						Themed = { TextColor3 = "SubText" }, Parent = header,
 					})
 					if so.Tooltip then helpMarker(title, so.Tooltip) end
@@ -4473,6 +4569,8 @@ function Library:CreateWindow(opts)
 			Callback = function(v) Library.Animations = v end })
 		menu:AddToggle({ Name = "Dim Background", Default = Window._dim, Flag = "UI_Dim", Tooltip = "Darken the game behind the menu while it is open",
 			Callback = function(v) Window:SetDim(v) end })
+		menu:AddToggle({ Name = "Custom Cursor", Default = Library.CustomCursor ~= false, Flag = "UI_Cursor", Tooltip = "Show the themed cursor while the menu is open",
+			Callback = function(v) Window:SetCursor(v) end })
 		menu:AddButtons({
 			{ "Center", function() Window:Center() end, Tooltip = "Move the window back to the middle" },
 			{ "Unload", function()
@@ -4709,6 +4807,8 @@ function Library:CreateWindow(opts)
 	end
 
 	function Window:Destroy()
+		Window._open = false
+		Library:_refreshCursor() -- gives the system pointer back
 		gui:Destroy()
 	end
 
@@ -4727,6 +4827,7 @@ end
 function Library:Unload()
 	if self.Unloaded then return end
 	self.Unloaded = true
+	pcall(function() self:_refreshCursor() end) -- gives the system pointer back
 	for _, fn in ipairs(self._unloadFns) do pcall(fn) end
 	for _, c in ipairs(self.Connections) do pcall(function() c:Disconnect() end) end
 	table.clear(self.Connections)

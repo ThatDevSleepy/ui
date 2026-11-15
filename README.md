@@ -5,7 +5,7 @@ A clean Roblox UI library: an icon sidebar with right-click subpages, configs, t
 ## Load it
 
 ```lua
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ElsDevs/ui/main/SleekUI.lua"))()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ThatDevSleepy/ui/main/SleekUI.lua"))()
 ```
 
 Loading the library doesn't open anything by itself. To see every element in action, run [`demo.lua`](demo.lua).
@@ -13,7 +13,7 @@ Loading the library doesn't open anything by itself. To see every element in act
 ## Quick start
 
 ```lua
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ElsDevs/ui/main/SleekUI.lua"))()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ThatDevSleepy/ui/main/SleekUI.lua"))()
 
 local Window = Library:CreateWindow({ Title = "My Script" })
 
@@ -92,4 +92,5 @@ Configs and themes are saved in `workspace/SleekUI/` with your executor's file f
 
 - **Notifications**: hovering one pauses its timer, the `x` (or a click) closes it, and the same notification sent again shows `x2`, `x3` instead of stacking.
 - **Key conflicts**: binding a key that another feature already uses shows a warning naming that feature. Turn it off with `Library.KeyConflictWarnings = false`.
+- **Scroll edge fades**: a page with more content above or below fades out softly at that edge instead of cutting rows off.
 - **Dim background**: the game darkens slightly while the menu is open. Switch it off in Settings, with `Window:SetDim(false)`, or with `Dim = false` in `CreateWindow`.

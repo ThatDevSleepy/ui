@@ -2,7 +2,7 @@
 	SleekUI v3 - UI library
 
 	USING IT IN YOUR OWN SCRIPT
-	  local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ElsDevs/ui/main/SleekUI.lua"))()
+	  local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ThatDevSleepy/ui/main/SleekUI.lua"))()
 	  -- (or loadstring(readfile("SleekUI.lua"))() for a local copy)
 	  local Window  = Library:CreateWindow{ Title = "My Script" }
 	  local Main    = Window:AddPage{ Name = "Main", Icon = "combat" }:AddSubPage("General")
@@ -153,6 +153,17 @@ Library.FontOrder = FontOrder
 
 local ThemeRegistry = setmetatable({}, { __mode = "k" }) -- instance -> { Property = ThemeKey }
 
+-- Roblox can garbage-collect the script-side handle of an instance that nothing in the script
+-- points at any more, even while the instance is still on screen. Its weak ThemeRegistry entry
+-- goes with it, and that element then silently stops following theme changes (the watermark logo
+-- stayed on the old accent this way). A Destroying listener holds the handle, so the entry lives
+-- exactly as long as the instance does.
+local function pinThemed(inst)
+	pcall(function()
+		inst.Destroying:Connect(function() ThemeRegistry[inst] = nil end)
+	end)
+end
+
 ---------------------------------------------------------------- helpers
 local TEXT_CLASSES = { TextLabel = true, TextButton = true, TextBox = true }
 
@@ -172,6 +183,7 @@ local function create(class, props, children)
 	if themed then
 		for prop, key in pairs(themed) do inst[prop] = Theme[key] end
 		ThemeRegistry[inst] = themed
+		pinThemed(inst)
 	end
 	for _, c in ipairs(children or {}) do c.Parent = inst end
 	if parent then inst.Parent = parent end
@@ -1367,8 +1379,9 @@ function Library:CreateWatermark(o)
 		Themed = { BackgroundColor3 = "Card" }, Parent = gui,
 	}, { corner(8), stroke(), padding(0, 12, 0, 12), list(8, true, { VerticalAlignment = Enum.VerticalAlignment.Center }) })
 	local logoAsset = self:GetIcon(o.Icon or "paw")
+	local logoImg
 	if logoAsset then
-		create("ImageLabel", {
+		logoImg = create("ImageLabel", {
 			Size = UDim2.fromOffset(14, 14), BackgroundTransparency = 1, Image = logoAsset, ScaleType = Enum.ScaleType.Fit,
 			LayoutOrder = 1, Themed = { ImageColor3 = "Accent" }, Parent = frame,
 		})
@@ -1391,6 +1404,9 @@ function Library:CreateWatermark(o)
 	end)
 
 	local function render()
+		-- the logo follows the accent together with the title (set here as well as through the
+		-- theme registry, so the two can never end up in different colours)
+		if logoImg then logoImg.ImageColor3 = Theme.Accent end
 		local sep = string.format('  <font color="#%s">/</font>  ', Theme.Stroke:ToHex())
 		local parts = { string.format('<font color="#%s"><b>%s</b></font>', Theme.Accent:ToHex(), escapeRich(Watermark.Title)) }
 		if Watermark.Show.FPS then table.insert(parts, fps .. " fps") end
@@ -4238,6 +4254,37 @@ function Library:CreateWindow(opts)
 			scroll:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
 				if Library._tip and Library._tip.Visible then Library._tip.Visible = false end
 			end)
+			-- soft fade on the top / bottom edge while there is more page in that direction, so
+			-- rows don't get cut off hard. Plain frames above the scroller: they never take clicks.
+			local function edgeFade(top)
+				return create("Frame", {
+					AnchorPoint = Vector2.new(0, top and 0 or 1), Position = UDim2.fromScale(0, top and 0 or 1), Size = UDim2.new(1, -6, 0, 26),
+					BackgroundTransparency = 1, BorderSizePixel = 0, Active = false, ZIndex = 5,
+					Themed = { BackgroundColor3 = "Background" }, Parent = group,
+				}, { create("UIGradient", { Rotation = 90, Transparency = top and NumberSequence.new(0, 1) or NumberSequence.new(1, 0) }) })
+			end
+			local fadeTop, fadeBottom = edgeFade(true), edgeFade(false)
+			local showTop, showBottom = false, false
+			local function updateFades()
+				-- pcall: runs from layout signals, nothing here may ever reach the console
+				pcall(function()
+					local y = scroll.CanvasPosition.Y
+					local max = (scroll.AbsoluteCanvasSize.Y - scroll.AbsoluteWindowSize.Y) / Library:_scale()
+					local t, b = y > 4, y < max - 4
+					if t ~= showTop then
+						showTop = t
+						tween(fadeTop, 0.15, { BackgroundTransparency = t and 0 or 1 }, Enum.EasingStyle.Quad)
+					end
+					if b ~= showBottom then
+						showBottom = b
+						tween(fadeBottom, 0.15, { BackgroundTransparency = b and 0 or 1 }, Enum.EasingStyle.Quad)
+					end
+				end)
+			end
+			Sub._updateFades = updateFades
+			scroll:GetPropertyChangedSignal("CanvasPosition"):Connect(updateFades)
+			scroll:GetPropertyChangedSignal("AbsoluteCanvasSize"):Connect(updateFades)
+			scroll:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(updateFades)
 			-- two columns side by side via a horizontal list (no overlap possible)
 			local inner = create("Frame", {
 				Position = UDim2.fromOffset(14, 14), Size = UDim2.new(1, -28, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,

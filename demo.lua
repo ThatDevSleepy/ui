@@ -8,7 +8,7 @@
 	Run it in your executor (a baseplate is fine). RightShift opens / closes the menu.
 ]]
 
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ElsDevs/ui/main/SleekUI.lua"))()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ThatDevSleepy/ui/main/SleekUI.lua"))()
 
 ---------------------------------------------------------------------------------------------
 -- Loader (optional splash card while your script sets up)

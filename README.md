@@ -86,7 +86,7 @@ Library:CreateKeybindList()
 Library:Unload()
 ```
 
-Configs and themes are saved in `workspace/SleekUI/` with your executor's file functions. That includes every flag, plus the watermark and keybind list positions.
+Configs and themes are saved in `workspace/SleekUI/` with your executor's file functions. A config holds every flag, the watermark and keybind list positions, and the look (theme colours and font), so loading a config also brings its theme back. Set `Library.ThemeInConfigs = false` to keep configs to settings only.
 
 ## Small things that help
 

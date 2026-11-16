@@ -30,21 +30,28 @@
 	  Window:SetCursor(bool)         small arrow cursor in the accent color, only while the menu is open (Cursor = false in CreateWindow)
 	                                 Library.CursorColor = Color3.new(0, 0, 0) before CreateWindow for a fixed color instead
 	                                 Library.CursorLead = 1 draws it one frame ahead so it keeps up with the mouse (0 = off)
+	  Window:SetOpacity(0.3 - 1)     see-through window and cards (also a slider in Settings)
+	  Library.ClickRipple = false    no pulse where a button or toggle is pressed (also a switch in Settings)
 	  search box in the top left (Ctrl+F) searches every page; click a result to jump to it
 	  click a section header to collapse it
 
 	ELEMENTS - every element takes a table. Shared options on all of them:
 	  Flag = "name"  (saved in configs, readable in Library.Flags)
 	  Tooltip = "text"   Disabled = true   NoSave = true
+	  Risky = true | "why"   red [!] after the name; a risky toggle asks once before the user switches it on
+	                         (keybinds, configs and :Set() from a script are never interrupted)
 	  every element returns an object with :Set :Get :SetVisible :SetDisabled (where it makes sense)
 	  right-click most elements for a context menu (reset, copy/paste, clear, ...)
 
 	  Section:AddToggle      { Name, Default, Callback(bool) }      -> :AddKeybind{} :AddColorPicker{}
 	  Section:AddSlider      { Name, Min, Max, Default, Increment, Suffix, Callback(n) }
+	                         mouse wheel or Left / Right arrows move it one step while the mouse rests on its
+	                         track (the page holds still meanwhile); Library.SliderWheel = false turns that off
 	  Section:AddRangeSlider { Name, Min, Max, Default = {lo, hi}, Increment, Suffix, Callback({lo, hi}) }
 	  Section:AddDropdown    { Name, Options, Default, Multi, Search, Callback(v) }  -> :Refresh(list)
 	  Section:AddKeybind     { Name, Default, Mode = "Toggle"|"Hold"|"Always", Callback(active), Pressed, Changed }
 	  Section:AddColorPicker { Name, Default, Transparency = 0-1, NoTransparency, Callback(color, transparency) }
+	                         the panel shows the last 8 colours you picked by hand; click one to use it again
 	  Section:AddTextbox     { Name, Placeholder, Default, Numeric, Callback(text), OnEnter }
 	  Section:AddButton      { Name, Callback, Confirm = true (click twice) }
 	  Section:AddButtons     { {Name, Callback}, ... }
@@ -74,6 +81,10 @@
 	  Library:CreateWatermark{ Title }     Library:CreateKeybindList()
 	  Library:SetTheme(key, value)  Library:ApplyTheme(name|table)  Library:SetFont(name)
 	  Library:SaveConfig / LoadConfig / DeleteConfig / ListConfigs / SetAutoload
+	  configs also hold the look (theme colours + font); Library.ThemeInConfigs = false keeps them to settings only
+	  Library:SetGameAutoload(name)  a config for the game you are in; LoadAutoload picks it over the general one
+	  Library:SetAutoSave(bool)      writes changes back into the config last loaded or saved (GetActiveConfig)
+	                                 load your config after building the whole menu, or late settings save as defaults
 	  Library.Animations = false   (turns every tween instant)
 	  Library:Unload()
 ]]
@@ -236,6 +247,12 @@ local function halo()
 	return s
 end
 
+-- click ripple: a soft circle that grows from where the button was pressed and fades out.
+-- It gets its own clipping frame, so nothing about the button itself changes. `input` is the
+-- press (its Position is in the same space as AbsolutePosition); without one it starts in the
+-- middle. Library.ClickRipple = false turns it off.
+local ripple
+
 local function padding(t, l, b, r)
 	return create("UIPadding", {
 		PaddingTop = UDim.new(0, t), PaddingLeft = UDim.new(0, l or t),
@@ -257,6 +274,39 @@ local function tween(obj, t, props, style, dir)
 	local tw = TweenService:Create(obj, TweenInfo.new(t, style or Enum.EasingStyle.Quint, dir or Enum.EasingDirection.Out), props)
 	tw:Play()
 	return tw
+end
+
+function ripple(target, input)
+	if not Library.Animations or Library.ClickRipple == false then return end
+	-- pcall: purely decorative, so nothing in here may ever reach the console
+	pcall(function()
+		local scale = Library:_scale()
+		local size = target.AbsoluteSize / scale
+		local x, y = size.X / 2, size.Y / 2
+		if input then
+			x = math.max(math.min((input.Position.X - target.AbsolutePosition.X) / scale, size.X), 0)
+			y = math.max(math.min((input.Position.Y - target.AbsolutePosition.Y) / scale, size.Y), 0)
+		end
+		local clip = create("Frame", {
+			Name = "Ripple", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
+			ClipsDescendants = true, Active = false, ZIndex = target.ZIndex, Parent = target,
+		})
+		local dot = create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(0, 0),
+			BackgroundColor3 = Theme.Text, BackgroundTransparency = 0.82, BorderSizePixel = 0, Parent = clip,
+		}, { create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+		local d = math.max(size.X, size.Y) * 2
+		tween(dot, 0.45, { Size = UDim2.fromOffset(d, d), BackgroundTransparency = 1 }, Enum.EasingStyle.Quad)
+		task.delay(0.5, function() clip:Destroy() end)
+	end)
+end
+-- runs the ripple whenever `target` is pressed with the left mouse button or a finger
+local function rippleOnPress(target)
+	target.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			ripple(target, input)
+		end
+	end)
 end
 
 -- fade a freshly built popup in at its real size (a UIScale "pop" makes the text visibly grow).
@@ -305,6 +355,23 @@ function Library:Connect(signal, fn)
 	return c
 end
 local function connect(signal, fn) return Library:Connect(signal, fn) end
+
+-- Mouse-move and per-frame signals are shared: every slider, colour picker, drag handle and
+-- dependency group used to hold its own connection, so one mouse move woke up hundreds of
+-- them. Now each signal has ONE real connection that walks a plain list, which costs a
+-- fraction of that. pcall keeps one broken handler from stopping the rest (or reaching the
+-- console). Handlers here must not yield.
+local function sharedSignal(signal)
+	local fns = {}
+	connect(signal, function(a, b)
+		for i = 1, #fns do pcall(fns[i], a, b) end
+	end)
+	return function(fn) fns[#fns + 1] = fn end
+end
+local onInputChanged = sharedSignal(UserInputService.InputChanged)
+local onInputEnded = sharedSignal(UserInputService.InputEnded)
+local onHeartbeat = sharedSignal(RunService.Heartbeat)
+local onRenderStepped = sharedSignal(RunService.RenderStepped)
 
 -- every user callback goes through here: runs in its own thread, and an error inside it is
 -- caught (no red console spam) and shown as a notification instead, so one broken callback
@@ -366,7 +433,7 @@ local function makeDraggable(handle, target)
 			dragging, dragStart, startPos, startAbs = true, input.Position, target.Position, target.AbsolutePosition
 		end
 	end)
-	connect(UserInputService.InputChanged, function(input)
+	onInputChanged(function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 			local d = input.Position - dragStart
 			-- keep at least 40px on screen and the top edge reachable, so it can't be lost off-screen
@@ -384,7 +451,7 @@ local function makeDraggable(handle, target)
 			target.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
 		end
 	end)
-	connect(UserInputService.InputEnded, function(input)
+	onInputEnded(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = false
 		end
@@ -445,6 +512,63 @@ local function rowContextBlocked()
 	end
 	return true
 end
+
+-- Mouse wheel / arrow keys on sliders. The slider the mouse is resting on "claims" the wheel:
+-- the page stops scrolling while it holds the claim, and every wheel tick (or Left / Right
+-- arrow) moves it one step. A slider that only passes under the mouse while the page is being
+-- scrolled does not claim, so scrolling a page can never change a value by accident.
+-- Library.SliderWheel = false turns it off.
+local nudge = { target = nil, lastScroll = 0 }
+Library._nudge = nudge
+function nudge.release()
+	local t = nudge.target
+	nudge.target = nil
+	if t and t.scroll then pcall(function() t.scroll.ScrollingEnabled = true end) end
+end
+function nudge.claim(gui, step, isDisabled, fallbackScroll)
+	if Library.SliderWheel == false then return end
+	if nudge.target and nudge.target.gui == gui then return end
+	if os.clock() - nudge.lastScroll < 0.35 then return end -- the page is moving right now
+	nudge.release()
+	local scroll
+	pcall(function() scroll = gui:FindFirstAncestorWhichIsA("ScrollingFrame") end)
+	scroll = scroll or fallbackScroll
+	nudge.target = { gui = gui, step = step, disabled = isDisabled, scroll = scroll }
+	if scroll then pcall(function() scroll.ScrollingEnabled = false end) end
+end
+-- still the slider under the mouse? If not (mouse left, row hidden / disabled / destroyed) the
+-- claim is dropped, which also gives the page its scrolling back. `pos` is the mouse position
+-- in AbsolutePosition space (InputObject.Position), or nil to skip that part.
+function nudge.valid(pos)
+	local t = nudge.target
+	if not t then return false end
+	local ok, res = pcall(function()
+		if not t.gui.Parent or not visibleOnScreen(t.gui) or t.disabled() then return false end
+		if pos then
+			local p, s = t.gui.AbsolutePosition, t.gui.AbsoluteSize
+			-- a few px of slack so the claim doesn't flicker at the edge of the thin track
+			if pos.X < p.X - 4 or pos.X > p.X + s.X + 4 or pos.Y < p.Y - 4 or pos.Y > p.Y + s.Y + 4 then return false end
+		end
+		return true
+	end)
+	if ok and res then return true end
+	nudge.release()
+	return false
+end
+onInputChanged(function(input)
+	if not nudge.target then return end
+	if input.UserInputType == Enum.UserInputType.MouseWheel then
+		if nudge.valid(nil) then pcall(nudge.target.step, input.Position.Z > 0 and 1 or -1) end
+	elseif input.UserInputType == Enum.UserInputType.MouseMovement then
+		nudge.valid(input.Position)
+	end
+end)
+connect(UserInputService.InputBegan, function(input)
+	if not nudge.target then return end
+	local dir = (input.KeyCode == Enum.KeyCode.Right and 1) or (input.KeyCode == Enum.KeyCode.Left and -1) or nil
+	if not dir or UserInputService:GetFocusedTextBox() then return end
+	if nudge.valid(nil) then pcall(nudge.target.step, dir) end
+end)
 
 -- right-click (on release) opens a context menu built by itemsFn
 local function attachContext(target, title, itemsFn)
@@ -536,15 +660,38 @@ function Library:SetNotificationPosition(pos)
 end
 
 ---------------------------------------------------------------- theming api
+local function setProp(inst, prop, value) inst[prop] = value end
 function Library:SetTheme(key, value)
 	if value == nil then return end
 	Theme[key] = value
+	-- inside ApplyTheme / SetFont several keys change at once: just note them, one pass at the end
+	local batch = self._themeBatch
+	if batch then batch[key] = true return end
 	for inst, map in pairs(ThemeRegistry) do
 		for prop, k in pairs(map) do
-			if k == key then pcall(function() inst[prop] = value end) end
+			if k == key then pcall(setProp, inst, prop, value) end
 		end
 	end
 	for _, cb in ipairs(self.ThemeCallbacks) do pcall(cb, key) end
+end
+-- Runs fn with theme changes held back, then recolours everything in ONE pass. A preset used to
+-- walk every themed object and re-render every toggle once per colour (ten times over).
+function Library:_batchTheme(fn)
+	if self._themeBatch then return fn() end -- already inside a batch
+	local batch = {}
+	self._themeBatch = batch
+	local ok, res = pcall(fn)
+	self._themeBatch = nil
+	if next(batch) ~= nil then
+		for inst, map in pairs(ThemeRegistry) do
+			for prop, k in pairs(map) do
+				if batch[k] then pcall(setProp, inst, prop, Theme[k]) end
+			end
+		end
+		for _, cb in ipairs(self.ThemeCallbacks) do pcall(cb) end
+	end
+	if ok then return res end
+	return false
 end
 Library.SetThemeColor = Library.SetTheme
 function Library:SetAccent(c) self:SetTheme("Accent", c) end
@@ -553,28 +700,32 @@ function Library:SetFont(name)
 	local p = FontPresets[name]
 	if not p then return false end
 	Theme.FontName = name
-	self:SetTheme("Font", fontEnum(p[1], Enum.Font.GothamMedium))
-	self:SetTheme("FontBold", fontEnum(p[2], Enum.Font.GothamBold))
+	self:_batchTheme(function()
+		self:SetTheme("Font", fontEnum(p[1], Enum.Font.GothamMedium))
+		self:SetTheme("FontBold", fontEnum(p[2], Enum.Font.GothamBold))
+	end)
 	return true
 end
 
 function Library:ApplyTheme(t)
 	if type(t) == "string" then t = Presets[t] end
 	if type(t) ~= "table" then return false end
-	for _, key in ipairs(ThemeKeys) do
-		local c = t[key]
-		if type(c) == "string" then pcall(function() c = Color3.fromHex(c) end) end
-		if typeof(c) == "Color3" then
-			self:SetTheme(key, c)
-			local setter = self.SetFlags["Theme_" .. key]
-			if setter then setter(c, true) end
+	self:_batchTheme(function()
+		for _, key in ipairs(ThemeKeys) do
+			local c = t[key]
+			if type(c) == "string" then pcall(function() c = Color3.fromHex(c) end) end
+			if typeof(c) == "Color3" then
+				self:SetTheme(key, c)
+				local setter = self.SetFlags["Theme_" .. key]
+				if setter then setter(c, true) end
+			end
 		end
-	end
-	if type(t.Font) == "string" and FontPresets[t.Font] then
-		self:SetFont(t.Font)
-		local setter = self.SetFlags["Theme_Font"]
-		if setter then setter(t.Font, true) end
-	end
+		if type(t.Font) == "string" and FontPresets[t.Font] then
+			self:SetFont(t.Font)
+			local setter = self.SetFlags["Theme_Font"]
+			if setter then setter(t.Font, true) end
+		end
+	end)
 	return true
 end
 
@@ -623,6 +774,16 @@ function Library:GetConfig()
 			out[flag] = v
 		end
 	end
+	-- the look travels with the config: all theme colours plus the font. It is one "__theme"
+	-- entry (not the Theme_ flags) so it works with or without a Settings page.
+	-- Library.ThemeInConfigs = false keeps configs to settings only.
+	if self.ThemeInConfigs ~= false then
+		local look = { Font = Theme.FontName }
+		for _, key in ipairs(ThemeKeys) do
+			if typeof(Theme[key]) == "Color3" then look[key] = Theme[key]:ToHex() end
+		end
+		out.__theme = look
+	end
 	return HttpService:JSONEncode(out)
 end
 
@@ -640,6 +801,28 @@ function Library:ApplyConfig(json)
 	-- callbacks run while the config applies; any popups they raise are held back so loading
 	-- shows one "Loaded" notice instead of one per feature (errors still show)
 	self._applyingConfig = true
+	-- the saved look (colours + font). Older configs have none and leave the theme alone.
+	local look = data.__theme
+	data.__theme = nil
+	if type(look) == "table" and self.ThemeInConfigs ~= false then
+		-- pcall: a hand-edited config with junk in it must not stop the rest from loading
+		pcall(function()
+			-- only what actually differs, so loading a config with the same look recolours nothing
+			local diff, any = {}, false
+			for _, key in ipairs(ThemeKeys) do
+				local code = look[key]
+				if type(code) == "string" and typeof(Theme[key]) == "Color3" and (code:lower():gsub("#", "")) ~= Theme[key]:ToHex() then
+					diff[key] = code
+					any = true
+				end
+			end
+			if type(look.Font) == "string" and look.Font ~= Theme.FontName then
+				diff.Font = look.Font
+				any = true
+			end
+			if any then self:ApplyTheme(diff) end
+		end)
+	end
 	for flag, v in pairs(data) do
 		local setter = self.SetFlags[flag]
 		-- decode inside pcall too: a broken value (bad hex) must not stop the load half-way
@@ -698,6 +881,7 @@ function Library:SaveConfig(name)
 	if not ensureFolders() then return false, "file functions unavailable" end
 	if name == "" then return false, "empty name" end
 	writefile(self.Directory .. "/configs/" .. name .. ".json", self:GetConfig())
+	self._activeConfig = name
 	return true
 end
 
@@ -706,7 +890,63 @@ function Library:LoadConfig(name)
 	if not ensureFolders() then return false, "file functions unavailable" end
 	local path = self.Directory .. "/configs/" .. name .. ".json"
 	if not isfile(path) then return false, "config not found" end
-	return self:ApplyConfig(readfile(path))
+	local ok, err = self:ApplyConfig(readfile(path))
+	if ok then self._activeConfig = name end
+	return ok, err
+end
+
+-- The active config is the one last loaded or saved. With auto-save on, later changes are
+-- written back into it by themselves, a moment after you stop changing things.
+-- Load your config AFTER building the whole menu: a setting created later would be saved back
+-- with its default value. The choice is remembered in autosave.txt, separate from configs.
+function Library:GetActiveConfig() return self._activeConfig end
+
+function Library:GetAutoSave()
+	if self.AutoSave ~= nil then return self.AutoSave end
+	local on = false
+	pcall(function()
+		if not ensureFolders() then return end
+		local p = self.Directory .. "/autosave.txt"
+		on = isfile(p) and readfile(p) == "1"
+	end)
+	return on
+end
+
+function Library:_autoSaveTick()
+	local name = self._activeConfig
+	if not name or not ensureFolders() then return end
+	local data = self:GetConfig()
+	if self._autoSaveFor ~= name then
+		-- another config just became active: note how it looks now, save nothing yet
+		self._autoSaveFor, self._autoSaveData, self._autoSavePending = name, data, nil
+		return
+	end
+	if data == self._autoSaveData then self._autoSavePending = nil return end
+	-- still changing (a slider being dragged)? wait until two checks in a row agree
+	if data ~= self._autoSavePending then self._autoSavePending = data return end
+	self._autoSavePending = nil
+	local path = self.Directory .. "/configs/" .. name .. ".json"
+	if not isfile(path) then self._activeConfig = nil return end -- deleted from outside
+	writefile(path, data)
+	self._autoSaveData = data
+end
+
+function Library:SetAutoSave(on)
+	on = on and true or false
+	self.AutoSave = on
+	pcall(function()
+		if ensureFolders() then writefile(self.Directory .. "/autosave.txt", on and "1" or "0") end
+	end)
+	if not on or self._autoSaveLoop then return end
+	self._autoSaveLoop = true
+	local lastCheck = 0
+	self:Connect(RunService.Heartbeat, function()
+		if not self.AutoSave or self.Unloaded or self._applyingConfig then return end
+		local now = os.clock()
+		if now - lastCheck < 1 then return end
+		lastCheck = now
+		pcall(function() self:_autoSaveTick() end) -- file errors must never reach the console
+	end)
 end
 
 function Library:DeleteConfig(name)
@@ -717,6 +957,8 @@ function Library:DeleteConfig(name)
 	delfile(path)
 	-- don't leave autoload pointing at a file that's gone
 	if self:GetAutoload() == name then self:SetAutoload("") end
+	if self:GetGameAutoload() == name then self:SetGameAutoload("") end
+	if self._activeConfig == name then self._activeConfig = nil end
 	return true
 end
 
@@ -735,6 +977,8 @@ function Library:RenameConfig(old, new)
 	writefile(self.Directory .. "/configs/" .. new .. ".json", data)
 	if typeof(delfile) == "function" then delfile(self.Directory .. "/configs/" .. old .. ".json") end
 	if self:GetAutoload() == old then self:SetAutoload(new) end
+	if self:GetGameAutoload() == old then self:SetGameAutoload(new) end
+	if self._activeConfig == old then self._activeConfig = new end
 	return true
 end
 
@@ -785,8 +1029,34 @@ function Library:SetAutoload(name)
 	return true
 end
 
+-- Per-game autoload: one config per game (kept in autoload_<game id>.txt). When the game you
+-- are in has one, LoadAutoload loads it instead of the general autoload config.
+local function gameKey()
+	local ok, id = pcall(function() return game.GameId end)
+	if ok and type(id) == "number" and id > 0 then return tostring(id) end
+	ok, id = pcall(function() return game.PlaceId end)
+	if ok and type(id) == "number" and id > 0 then return tostring(id) end
+	return nil
+end
+
+function Library:GetGameAutoload()
+	local id = gameKey()
+	if not id or not ensureFolders() then return "" end
+	local p = self.Directory .. "/autoload_" .. id .. ".txt"
+	return isfile(p) and readfile(p) or ""
+end
+
+function Library:SetGameAutoload(name)
+	local id = gameKey()
+	if not id then return false, "this game has no id" end
+	if not ensureFolders() then return false, "file functions unavailable" end
+	writefile(self.Directory .. "/autoload_" .. id .. ".txt", cleanName(name))
+	return true
+end
+
 function Library:LoadAutoload()
-	local name = self:GetAutoload()
+	local name = self:GetGameAutoload()
+	if name == "" or not self:ConfigExists(name) then name = self:GetAutoload() end
 	if name == "" then return false, "none" end
 	local ok, err = self:LoadConfig(name)
 	return ok, ok and name or err
@@ -895,7 +1165,7 @@ function Library:_tooltip()
 		Font = Theme.Font, ZIndex = 400, Themed = { BackgroundColor3 = "Card", TextColor3 = "Text" }, Parent = self:_getGui(),
 	}, { corner(6), tipStroke, padding(5, 9, 5, 9) })
 	self._tipStroke = tipStroke
-	connect(RunService.RenderStepped, function()
+	onRenderStepped(function()
 		if tip.Visible then
 			-- the hovered element was hidden/removed under the mouse (no MouseLeave comes then)
 			local owner = Library._tipOwner
@@ -1417,7 +1687,7 @@ function Library:CreateWatermark(o)
 	if o.Show then for k, v in pairs(o.Show) do Watermark.Show[k] = v end end
 
 	local frames, fps, last = 0, 0, os.clock()
-	connect(RunService.RenderStepped, function()
+	onRenderStepped(function()
 		frames += 1
 		local now = os.clock()
 		if now - last >= 0.5 then
@@ -1667,7 +1937,7 @@ local function buildKeyChip(parent, o, layoutOrder)
 			elseif state.Mode == "Hold" then Bind:SetActive(true) end
 		end
 	end)
-	connect(UserInputService.InputEnded, function(input)
+	onInputEnded(function(input)
 		if state.Mode == "Hold" and inputMatches(input, state.Key) then Bind:SetActive(false) end
 	end)
 
@@ -1677,6 +1947,39 @@ local function buildKeyChip(parent, o, layoutOrder)
 end
 
 -- color swatch + expandable picker panel (SV square, hue bar, optional alpha bar, hex box)
+-- Recently used colours, shared by every picker: newest first, at most 8, shown as a row of
+-- small squares in the picker panel and remembered between sessions (recent_colors.json).
+-- Only colours the user picked by hand get in, not ones set by a script or a config.
+local RECENT_MAX = 8
+local function recentColors()
+	if Library._recentColors then return Library._recentColors end
+	local out = {}
+	pcall(function()
+		if not ensureFolders() then return end
+		local p = Library.Directory .. "/recent_colors.json"
+		if not isfile(p) then return end
+		local data = HttpService:JSONDecode(readfile(p))
+		if type(data) ~= "table" then return end
+		for _, code in ipairs(data) do
+			if #out < RECENT_MAX and type(code) == "string" and pcall(Color3.fromHex, code) then table.insert(out, code) end
+		end
+	end)
+	Library._recentColors = out
+	return out
+end
+local function rememberColor(c)
+	local recent = recentColors()
+	local code = c:ToHex()
+	for i = #recent, 1, -1 do
+		if recent[i] == code then table.remove(recent, i) end
+	end
+	table.insert(recent, 1, code)
+	while #recent > RECENT_MAX do table.remove(recent) end
+	pcall(function()
+		if ensureFolders() then writefile(Library.Directory .. "/recent_colors.json", HttpService:JSONEncode(recent)) end
+	end)
+end
+
 local function buildColorPicker(section, swatchParent, panelOrder, o)
 	o = o or {}
 	-- Default may be a Color3, a hex string ("#ff0000") or { r, g, b } (0-255)
@@ -1696,7 +1999,7 @@ local function buildColorPicker(section, swatchParent, panelOrder, o)
 	local defaultAlpha = alpha
 	local rainbow = false
 	local open = false
-	local PANEL_H = hasAlpha and 150 or 134
+	local PANEL_H = hasAlpha and 170 or 154 -- the last 20px are the row of recent colours
 
 	local swatchHolder = create("Frame", { Size = UDim2.fromOffset(28, 16), BackgroundTransparency = 1, LayoutOrder = 2, Parent = swatchParent })
 	-- dark backing so transparency is visible on the swatch
@@ -1801,9 +2104,36 @@ local function buildColorPicker(section, swatchParent, panelOrder, o)
 	end
 	function Picker:Get() return color, alpha end
 	function Picker:SetRainbow(b) rainbow = b and true or false end
+
+	-- row of recently used colours under the hex box; empty slots stay as blank squares
+	local recentSlots = {}
+	local function refreshRecent()
+		local recent = recentColors()
+		for i, slot in ipairs(recentSlots) do
+			local ok, c = pcall(Color3.fromHex, recent[i] or "")
+			slot.BackgroundColor3 = (recent[i] ~= nil and ok) and c or Theme.Card
+		end
+	end
+	for i = 1, RECENT_MAX do
+		local slot = create("TextButton", {
+			Position = UDim2.fromOffset(6 + (i - 1) * 18, (hasAlpha and 120 or 104) + 24), Size = UDim2.fromOffset(14, 14),
+			Text = "", AutoButtonColor = false, BackgroundColor3 = Theme.Card, Parent = inner,
+		}, { corner(3), stroke() })
+		recentSlots[i] = slot
+		slot.MouseButton1Click:Connect(function()
+			local code = recentColors()[i]
+			if not code then return end
+			rainbow = false
+			Picker:Set(code)
+		end)
+	end
+	onTheme(function() if open then refreshRecent() end end) -- closed panels refresh when they open
+	Picker._refreshRecent = refreshRecent
+
 	function Picker:SetOpen(state)
 		open = state
 		if open then
+			refreshRecent()
 			panel.Visible = true
 			tween(panel, 0.3, { Size = UDim2.new(1, 0, 0, PANEL_H) })
 		else
@@ -1823,7 +2153,11 @@ local function buildColorPicker(section, swatchParent, panelOrder, o)
 			end },
 		}
 		if Library._clipColor then
-			table.insert(items, { Text = "Paste", Hint = "#" .. Library._clipColor:ToHex():upper(), Callback = function() Picker:Set(Library._clipColor) end })
+			table.insert(items, { Text = "Paste", Hint = "#" .. Library._clipColor:ToHex():upper(), Callback = function()
+				Picker:Set(Library._clipColor)
+				rememberColor(color)
+				refreshRecent()
+			end })
 		end
 		table.insert(items, { Text = "Rainbow", Kind = "check", Checked = rainbow, Callback = function() Picker:SetRainbow(not rainbow) end })
 		table.insert(items, "-")
@@ -1863,18 +2197,23 @@ local function buildColorPicker(section, swatchParent, panelOrder, o)
 	hook(svHit, "sv")
 	hook(hueHit, "hue")
 	if alphaHit then hook(alphaHit, "alpha") end
-	connect(UserInputService.InputChanged, function(input)
+	onInputChanged(function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 			update(input.Position)
 		end
 	end)
-	connect(UserInputService.InputEnded, function(input)
+	onInputEnded(function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
 			tween(cursors[dragging], 0.12, { Size = rest[dragging] })
+			-- the colour the drag ended on goes into the recent row (not for the transparency bar)
+			if dragging ~= "alpha" then
+				rememberColor(color)
+				refreshRecent()
+			end
 			dragging = nil
 		end
 	end)
-	connect(RunService.Heartbeat, function()
+	onHeartbeat(function()
 		if rainbow then
 			h = (os.clock() * 0.15) % 1
 			commit()
@@ -1883,7 +2222,13 @@ local function buildColorPicker(section, swatchParent, panelOrder, o)
 	hex.Focused:Connect(function() hex.Text = "#" .. color:ToHex():upper() end)
 	hex.FocusLost:Connect(function()
 		local txt = hex.Text:gsub("#", ""):gsub("%s", ""):sub(1, 6)
-		if #txt == 6 and txt:match("^%x+$") then Picker:Set(txt) else render() end
+		if #txt == 6 and txt:match("^%x+$") then
+			Picker:Set(txt)
+			rememberColor(color)
+			refreshRecent()
+		else
+			render()
+		end
 	end)
 	swatch.MouseButton1Click:Connect(function() Picker:SetOpen(not open) end)
 
@@ -2010,11 +2355,16 @@ end
 
 -- every element goes through here: search index, tooltip, disable overlay, visibility
 -- small "[?]" next to an element's name; hovering it shows the tooltip
-local function helpMarker(label, text)
+-- risk = true makes it the red "[!]" of a Risky element instead. A row can have both: `shift`
+-- moves this marker right past the other one, `reserve` keeps room for the other one.
+local RISK_COLOR = rgb(255, 95, 95)
+local function helpMarker(label, text, risk, shift, reserve)
+	shift, reserve = shift or 0, reserve or 0
 	local parent = label.Parent
 	local marker = create("TextButton", {
 		AnchorPoint = Vector2.new(0, 0.5), Size = UDim2.fromOffset(22, 16), BackgroundTransparency = 1, AutoButtonColor = false,
-		Text = "[?]", TextSize = 10, Themed = { TextColor3 = "SubText" }, Parent = parent,
+		Text = risk and "[!]" or "[?]", TextSize = 10, TextColor3 = risk and RISK_COLOR or nil,
+		Themed = (not risk) and { TextColor3 = "SubText" } or nil, Parent = parent,
 	})
 	local function place()
 		-- measure the text unscaled (TextBounds may or may not include the window's UIScale)
@@ -2024,10 +2374,10 @@ local function helpMarker(label, text)
 		local w = (ok and typeof(size) == "Vector2") and size.X or label.TextBounds.X / Library:_scale()
 		-- a long, truncated name: keep the marker inside the label instead of on top of the controls
 		local maxW = label.AbsoluteSize.X / Library:_scale()
-		if maxW > 30 then w = math.min(w, maxW - 26) end
+		if maxW > 30 + reserve then w = math.min(w, maxW - 26 - reserve) end
 		local yScale = label.Position.Y.Scale + label.Size.Y.Scale / 2
 		local yOff = label.Position.Y.Offset + label.Size.Y.Offset / 2
-		marker.Position = UDim2.new(label.Position.X.Scale, label.Position.X.Offset + w + 4, yScale, yOff)
+		marker.Position = UDim2.new(label.Position.X.Scale, label.Position.X.Offset + w + 4 + shift, yScale, yOff)
 	end
 	label:GetPropertyChangedSignal("TextBounds"):Connect(place)
 	label:GetPropertyChangedSignal("Position"):Connect(place) -- Description moves the name up
@@ -2035,8 +2385,10 @@ local function helpMarker(label, text)
 	label:GetPropertyChangedSignal("AbsoluteSize"):Connect(place) -- key box attached, window resized
 	label:GetPropertyChangedSignal("Font"):Connect(place) -- theme font changed
 	place()
-	marker.MouseEnter:Connect(function() tween(marker, 0.12, { TextColor3 = Theme.Accent }) end)
-	marker.MouseLeave:Connect(function() tween(marker, 0.12, { TextColor3 = Theme.SubText }) end)
+	if not risk then
+		marker.MouseEnter:Connect(function() tween(marker, 0.12, { TextColor3 = Theme.Accent }) end)
+		marker.MouseLeave:Connect(function() tween(marker, 0.12, { TextColor3 = Theme.SubText }) end)
+	end
 	blockRowContext(marker)
 	Library:AttachTooltip(marker, text)
 	return marker
@@ -2047,8 +2399,18 @@ function Section:_register(row, name, api, o, label)
 	local el = { Row = row, Name = string.lower(name or ""), Display = name, Api = api, Hidden = false, Match = true, Section = self }
 	table.insert(self.Elements, el)
 	if Library.Window and not self._noIndex then table.insert(Library.Window._index, el) end
+	-- Risky = true (or a reason string): red "[!]" after the name; hovering it shows the reason
+	local risky = o.Risky and label and label.Parent and true or false
+	if risky then
+		local why = type(o.Risky) == "string" and o.Risky or "Risky: this one is more likely to get you noticed."
+		helpMarker(label, why, true, 0, o.Tooltip and 20 or 0)
+	end
 	if o.Tooltip then
-		if label and label.Parent then helpMarker(label, o.Tooltip) else Library:AttachTooltip(row, o.Tooltip) end
+		if label and label.Parent then
+			helpMarker(label, o.Tooltip, false, risky and 20 or 0, risky and 20 or 0)
+		else
+			Library:AttachTooltip(row, o.Tooltip)
+		end
 	end
 
 	local overlay
@@ -2148,9 +2510,10 @@ function Section:AddDependency(target, condition)
 		_parent = self,
 	}, Section)
 	local shown = nil
+	local function probe() return condition(target:Get()) end -- built once, not once per frame
 	local function update()
 		-- runs every frame, so nothing in here may throw (bad target / condition = hidden)
-		local ok, res = pcall(function() return condition(target:Get()) end)
+		local ok, res = pcall(probe)
 		local show = ok and res and true or false
 		if show == shown then return end
 		shown = show
@@ -2162,7 +2525,7 @@ function Section:AddDependency(target, condition)
 	end
 	if target.OnChanged then target:OnChanged(update) end
 	-- silent :Set(v, true) calls don't run callbacks, so also follow the value itself
-	connect(RunService.Heartbeat, function() if wrap.Parent then update() end end)
+	onHeartbeat(function() if wrap.Parent then update() end end)
 	task.defer(update)
 	return dep
 end
@@ -2345,10 +2708,25 @@ function Section:AddToggle(o)
 	Library._rowHover:bind(row,
 		function() tween(row, 0.15, { BackgroundTransparency = 0.6 }) end,
 		function() tween(row, 0.15, { BackgroundTransparency = 1 }) end)
-	row.MouseButton1Click:Connect(function() Toggle:Set(not value) end)
+	-- Risky toggles ask once before the user switches them on by hand. Keybinds, config loads
+	-- and :Set() from a script go straight through: a popup in the middle of a fight is worse.
+	local riskAccepted = false
+	local function userSet(b)
+		if b and o.Risky and not riskAccepted then
+			local why = type(o.Risky) == "string" and o.Risky or "It is more likely to get you noticed."
+			Library:Dialog({
+				Title = "Risky feature", Text = tostring(o.Name or "This") .. " is marked as risky. " .. why .. " Turn it on anyway?",
+				Buttons = { { "Cancel" }, { "Turn on", function() riskAccepted = true; Toggle:Set(true) end, "danger" } },
+			})
+			return
+		end
+		Toggle:Set(b)
+	end
+	rippleOnPress(row)
+	row.MouseButton1Click:Connect(function() userSet(not value) end)
 	attachContext(row, o.Name, function()
 		local items = {
-			{ Text = value and "Turn off" or "Turn on", Callback = function() Toggle:Set(not value) end },
+			{ Text = value and "Turn off" or "Turn on", Callback = function() userSet(not value) end },
 			{ Text = "Reset to default", Hint = default and "on" or "off", Callback = function() Toggle:Set(default) end },
 		}
 		if attachedBind then
@@ -2405,11 +2783,14 @@ function Section:AddSlider(o)
 	local function fmt(x) return string.format("%." .. decimals .. "f", x) end
 
 	local Slider = {}
-	function Slider:Set(x, silent)
+	function Slider:Set(x, silent, force)
 		x = tonumber(x) or value or min
 		x = math.clamp(math.floor((x - min) / inc + 0.5) * inc + min, min, max)
 		x = tonumber(fmt(x))
 		local changed = x ~= value
+		-- dragging fires on every mouse move, and most moves land on the step it is already on:
+		-- nothing to redraw then (force = redraw anyway: range changed, typed text to restore)
+		if not changed and not force then return end
 		value = x
 		local pct = (max - min) == 0 and 0 or (value - min) / (max - min)
 		local t = dragging and 0.06 or 0.25
@@ -2423,7 +2804,7 @@ function Section:AddSlider(o)
 	function Slider:SetText(t) label.Text = t end
 	function Slider:SetRange(newMin, newMax)
 		min, max = sliderRange({ Min = newMin, Max = newMax, Increment = inc })
-		Slider:Set(value, true)
+		Slider:Set(value, true, true)
 	end
 
 	local function fromX(x)
@@ -2439,12 +2820,20 @@ function Section:AddSlider(o)
 	end)
 	hit.MouseEnter:Connect(function() if not dragging then tween(knob, 0.15, { Size = UDim2.fromOffset(12, 12) }) end end)
 	hit.MouseLeave:Connect(function() if not dragging then tween(knob, 0.15, { Size = UDim2.fromOffset(10, 10) }) end end)
-	connect(UserInputService.InputChanged, function(input)
+	-- mouse wheel / Left and Right arrows move it one step while the mouse rests on the track
+	local sectionScroll = self.Sub and self.Sub.Scroll or nil
+	local function step(dir) Slider:Set(value + dir * inc) end
+	local function claim() nudge.claim(hit, step, function() return Slider.Disabled == true end, sectionScroll) end
+	Slider._step = step
+	hit.MouseEnter:Connect(claim)
+	hit.MouseMoved:Connect(claim)
+	hit.MouseLeave:Connect(function() if nudge.target and nudge.target.gui == hit then nudge.release() end end)
+	onInputChanged(function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 			fromX(input.Position.X)
 		end
 	end)
-	connect(UserInputService.InputEnded, function(input)
+	onInputEnded(function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
 			dragging = false
 			tween(knob, 0.15, { Size = UDim2.fromOffset(10, 10) })
@@ -2454,7 +2843,7 @@ function Section:AddSlider(o)
 	box.FocusLost:Connect(function()
 		box.TextColor3 = Theme.SubText
 		local n = tonumber((box.Text:gsub("[^%d%.%-]", "")))
-		if n then Slider:Set(n) else box.Text = fmt(value) .. suffix end
+		if n then Slider:Set(n, false, true) else box.Text = fmt(value) .. suffix end
 	end)
 	attachContext(row, o.Name, function()
 		return {
@@ -2539,12 +2928,12 @@ function Section:AddRangeSlider(o)
 			fromX(x)
 		end
 	end)
-	connect(UserInputService.InputChanged, function(input)
+	onInputChanged(function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 			fromX(input.Position.X)
 		end
 	end)
-	connect(UserInputService.InputEnded, function(input)
+	onInputEnded(function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
 			dragging = nil
 			tween(knobLo, 0.15, { Size = UDim2.fromOffset(10, 10) })
@@ -2930,6 +3319,7 @@ local function styleButton(btn, o)
 		function() tween(btn, 0.15, { BackgroundColor3 = Theme.Element }); release() end)
 	btn.MouseButton1Down:Connect(function() tween(btn, 0.08, { Size = UDim2.new(1, -4, 1, -3) }) end)
 	btn.MouseButton1Up:Connect(release)
+	rippleOnPress(btn)
 	btn.MouseButton1Click:Connect(function()
 		if o.Confirm and not armed then
 			-- first click arms, second click within 2.5s runs
@@ -3230,19 +3620,19 @@ function Section:AddCharacterPreview(o)
 			tween(hint, 0.2, { TextTransparency = 1 })
 		end
 	end)
-	connect(UserInputService.InputChanged, function(input)
+	onInputChanged(function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 			angle -= (input.Position.X - lastX) * 0.012
 			lastX = input.Position.X
 		end
 	end)
-	connect(UserInputService.InputEnded, function(input)
+	onInputEnded(function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
 			dragging = false
 		end
 	end)
 
-	connect(RunService.RenderStepped, function(dt)
+	onRenderStepped(function(dt)
 		if not model or not box.Parent or box.AbsoluteSize.X <= 0 then return end
 		if not visibleOnScreen(box) then return end
 		if auto and not dragging then angle += dt * 0.6 end
@@ -3534,7 +3924,7 @@ function Library:_refreshCursor()
 		-- trails behind. Drawing it where the mouse will be one frame from now (its last
 		-- movement added on) cancels that. Library.CursorLead = frames to lead by, 0 = off.
 		local last
-		connect(RunService.RenderStepped, function()
+		onRenderStepped(function()
 			if not cursor.Visible then last = nil return end
 			local m = mousePos()
 			local x, y = m.X, m.Y
@@ -3546,9 +3936,8 @@ function Library:_refreshCursor()
 			end
 			last = m
 			cursor.Position = UDim2.fromOffset(math.floor(x + 0.5), math.floor(y + 0.5))
-			pcall(function()
-				if UserInputService.MouseIconEnabled then UserInputService.MouseIconEnabled = false end
-			end)
+			-- the whole handler already runs protected, so no extra pcall (and no new closure) per frame
+			if UserInputService.MouseIconEnabled then UserInputService.MouseIconEnabled = false end
 		end)
 	end
 	if cursor then
@@ -3734,7 +4123,7 @@ function Library:CreateWindow(opts)
 				if Library._openOptions then Library._openOptions:Close() end
 			end
 		end)
-		connect(UserInputService.InputChanged, function(input)
+		onInputChanged(function(input)
 			if resizing and input.UserInputType == Enum.UserInputType.MouseMovement then
 				local d = (input.Position - startMouse) / uiScale.Scale
 				local newW = math.max(MIN_W, startSize.X + d.X)
@@ -3746,7 +4135,7 @@ function Library:CreateWindow(opts)
 				main.Position = main.Position + UDim2.fromOffset((newW - oldW) / 2 * uiScale.Scale, (newH - oldH) / 2 * uiScale.Scale)
 			end
 		end)
-		connect(UserInputService.InputEnded, function(input)
+		onInputEnded(function(input)
 			if input.UserInputType == Enum.UserInputType.MouseButton1 then resizing = false end
 		end)
 	end
@@ -3875,6 +4264,24 @@ function Library:CreateWindow(opts)
 		refreshDim()
 	end
 	refreshDim()
+	-- Window:SetOpacity(0.3 .. 1) makes the window and its cards see-through so the game shows
+	-- behind the menu. The controls themselves (text, toggles, sliders) stay solid and readable.
+	Window._opacity = 1
+	function Window:SetOpacity(x)
+		x = math.clamp(tonumber(x) or 1, 0.3, 1)
+		Window._opacity = x
+		main.BackgroundTransparency = 1 - x
+		for _, page in ipairs(Window.Pages) do
+			for _, sub in ipairs(page.SubPages or {}) do
+				for _, sec in ipairs(sub.Sections or {}) do
+					if sec.Inner then sec.Inner.BackgroundTransparency = 1 - x end
+				end
+				if sub._updateFades then sub._updateFades(true) end
+			end
+		end
+		local slider = Window._opacitySlider
+		if slider and math.abs((slider:Get() or 0) - x * 100) > 0.5 then slider:Set(x * 100, true) end
+	end
 	-- Window:SetCursor(false) keeps the normal system pointer instead of the themed one
 	if opts.Cursor == false then Library.CustomCursor = false end
 	function Window:SetCursor(on)
@@ -3901,6 +4308,7 @@ function Library:CreateWindow(opts)
 			if Library._openOptions then Library._openOptions:Close() end
 			for d in pairs(Library._dialogs or {}) do d:Close() end
 			if Library._rowHover then Library._rowHover:clear() end
+			nudge.release() -- a slider holding the mouse wheel gives the page its scrolling back
 			tween(uiScale, 0.14, { Scale = targetScale * 0.92 }, Enum.EasingStyle.Quad).Completed:Connect(function()
 				if not Window._open then
 					main.Visible = false
@@ -4220,7 +4628,7 @@ function Library:CreateWindow(opts)
 		local OUT, IN = 0.13, 0.32
 		pageCover.Visible = true
 		tween(prev.Group, OUT, { Position = UDim2.fromOffset(-dx * SLIDE, -dy * SLIDE) }, Enum.EasingStyle.Quad)
-		tween(pageCover, OUT, { BackgroundTransparency = 0 }, Enum.EasingStyle.Quad)
+		tween(pageCover, OUT, { BackgroundTransparency = 1 - (Window._opacity or 1) }, Enum.EasingStyle.Quad)
 		-- 2) swap pages under the cover, then the new one slides in as the cover fades out
 		task.delay(OUT, function()
 			if currentSub ~= sub then return end -- switched again in the meantime; that switch takes over
@@ -4362,6 +4770,7 @@ function Library:CreateWindow(opts)
 			Sub.Scroll = scroll
 			scroll:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
 				if Library._tip and Library._tip.Visible then Library._tip.Visible = false end
+				nudge.lastScroll = os.clock() -- sliders don't take the wheel while the page moves
 			end)
 			-- soft fade on the top / bottom edge while there is more page in that direction, so
 			-- rows don't get cut off hard. Plain frames above the scroller: they never take clicks.
@@ -4374,19 +4783,22 @@ function Library:CreateWindow(opts)
 			end
 			local fadeTop, fadeBottom = edgeFade(true), edgeFade(false)
 			local showTop, showBottom = false, false
-			local function updateFades()
+			local function updateFades(force)
 				-- pcall: runs from layout signals, nothing here may ever reach the console
 				pcall(function()
 					local y = scroll.CanvasPosition.Y
 					local max = (scroll.AbsoluteCanvasSize.Y - scroll.AbsoluteWindowSize.Y) / Library:_scale()
 					local t, b = y > 4, y < max - 4
-					if t ~= showTop then
+					-- a see-through window (Window:SetOpacity) gets fades that are just as see-through
+					local shown = 1 - (Window._opacity or 1)
+					force = force == true -- the signals pass their own arguments in
+					if t ~= showTop or force then
 						showTop = t
-						tween(fadeTop, 0.15, { BackgroundTransparency = t and 0 or 1 }, Enum.EasingStyle.Quad)
+						tween(fadeTop, 0.15, { BackgroundTransparency = t and shown or 1 }, Enum.EasingStyle.Quad)
 					end
-					if b ~= showBottom then
+					if b ~= showBottom or force then
 						showBottom = b
-						tween(fadeBottom, 0.15, { BackgroundTransparency = b and 0 or 1 }, Enum.EasingStyle.Quad)
+						tween(fadeBottom, 0.15, { BackgroundTransparency = b and shown or 1 }, Enum.EasingStyle.Quad)
 					end
 				end)
 			end
@@ -4417,7 +4829,7 @@ function Library:CreateWindow(opts)
 				local slot = create("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = count, Parent = col })
 				local card = create("Frame", {
 					Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-					Themed = { BackgroundColor3 = "Card" }, Parent = slot,
+					BackgroundTransparency = 1 - (Window._opacity or 1), Themed = { BackgroundColor3 = "Card" }, Parent = slot,
 				}, { corner(8), stroke(), padding(6, 6, 8, 6), list(4) })
 				local contentFrame = create("Frame", {
 					Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = 1, Parent = card,
@@ -4584,6 +4996,11 @@ function Library:CreateWindow(opts)
 			Callback = function(v) Window:SetDim(v) end })
 		menu:AddToggle({ Name = "Custom Cursor", Default = Library.CustomCursor ~= false, Flag = "UI_Cursor", Tooltip = "Show the themed cursor while the menu is open",
 			Callback = function(v) Window:SetCursor(v) end })
+		Window._opacitySlider = menu:AddSlider({ Name = "Menu Opacity", Min = 30, Max = 100, Increment = 5, Default = math.floor((Window._opacity or 1) * 100 + 0.5),
+			Suffix = "%", Flag = "UI_Opacity", Tooltip = "Lower it to see the game through the menu",
+			Callback = function(v) Window:SetOpacity(v / 100) end })
+		menu:AddToggle({ Name = "Click Ripple", Default = Library.ClickRipple ~= false, Flag = "UI_Ripple", Tooltip = "Small pulse where you press a button or toggle",
+			Callback = function(v) Library.ClickRipple = v end })
 		menu:AddButtons({
 			{ "Center", function() Window:Center() end, Tooltip = "Move the window back to the middle" },
 			{ "Unload", function()
@@ -4645,10 +5062,15 @@ function Library:CreateWindow(opts)
 			cfgList:Refresh(Library:ListConfigs())
 			if cfgSelected and not Library:ConfigExists(cfgSelected) then cfgSelected = nil end
 		end
+		local gameLabel
 		local function syncAutoLabel()
 			if not autoLabel then return end
 			local current = Library:GetAutoload()
 			autoLabel:Set("Autoload: " .. (current ~= "" and current or "none"))
+			if gameLabel then
+				local here = Library:GetGameAutoload()
+				gameLabel:Set("In this game: " .. (here ~= "" and here or "same as above"))
+			end
 		end
 		local function loadSelected(name)
 			name = name or cfgSelected
@@ -4696,6 +5118,11 @@ function Library:CreateWindow(opts)
 						local ok = setAutoload(v)
 						report(ok, "file functions unavailable", '"' .. v .. '" will autoload')
 					end },
+					{ Text = "Autoload in this game", Hint = "only here", Callback = function()
+						local ok, err = Library:SetGameAutoload(v)
+						syncAutoLabel()
+						report(ok, err, '"' .. v .. '" will autoload in this game')
+					end },
 					"-",
 					{ Text = "Rename", Callback = function()
 						Library:Dialog({ Title = "Rename config", Input = { Default = v, Placeholder = "new name" },
@@ -4739,6 +5166,12 @@ function Library:CreateWindow(opts)
 		cfg:AddButton({ Name = "Load", Callback = function() loadSelected() end })
 		cfg:AddButton({ Name = "Delete", Callback = deleteSelected })
 		cfg:AddButton({ Name = "Overwrite", Callback = overwriteSelected })
+		-- remembered in its own file, not inside configs (loading a config must not switch it)
+		local autoSaveOn = Library:GetAutoSave()
+		cfg:AddToggle({ Name = "Auto Save", Default = autoSaveOn, NoSave = true, Flag = "UI_AutoSave",
+			Tooltip = "Saves your changes into the config you last loaded or saved, by itself",
+			Callback = function(v) Library:SetAutoSave(v) end })
+		if autoSaveOn then Library:SetAutoSave(true) end
 
 		local auto = ConfigSub:AddSection({ Name = "Autoload", Side = "Right" })
 		autoLabel = auto:AddLabel("Autoload: " .. (Library:GetAutoload() ~= "" and Library:GetAutoload() or "none"))
@@ -4751,6 +5184,22 @@ function Library:CreateWindow(opts)
 				report(setAutoload(""), "file functions unavailable", "Autoload cleared")
 			end },
 		})
+		-- a different config for the game you are in right now; it wins over the one above
+		gameLabel = auto:AddLabel("In this game: same as above")
+		auto:AddButtons({
+			{ "Set For Game", function()
+				if not cfgSelected then return report(false, "Select a config first") end
+				local ok, err = Library:SetGameAutoload(cfgSelected)
+				syncAutoLabel()
+				report(ok, err, '"' .. cfgSelected .. '" will autoload in this game')
+			end, Tooltip = "Autoload the selected config only in this game" },
+			{ "Clear Game", function()
+				local ok, err = Library:SetGameAutoload("")
+				syncAutoLabel()
+				report(ok, err, "This game uses the normal autoload again")
+			end },
+		})
+		syncAutoLabel()
 		auto:AddButton({ Name = "Refresh List", Callback = refresh })
 		auto:AddButton({ Name = "Import From Text", Tooltip = "Paste config text someone shared with you", Callback = function()
 			Library:Dialog({ Title = "Import config", Text = "Paste the config text, then name it.", Input = { Placeholder = "paste config text here" },
@@ -4777,11 +5226,13 @@ function Library:CreateWindow(opts)
 		-- dragging a theme picker fires many times per frame; recolouring the whole UI each time lags,
 		-- so changes are collected and applied once per frame
 		local pendingTheme = {}
-		connect(RunService.Heartbeat, function()
+		onHeartbeat(function()
 			if next(pendingTheme) == nil then return end
 			local batch = pendingTheme
 			pendingTheme = {}
-			for key, c in pairs(batch) do Library:SetTheme(key, c) end
+			Library:_batchTheme(function()
+				for key, c in pairs(batch) do Library:SetTheme(key, c) end
+			end)
 		end)
 		for _, key in ipairs(ThemeKeys) do
 			th:AddColorPicker({ Name = key, Default = Theme[key], Flag = "Theme_" .. key, NoTransparency = true,

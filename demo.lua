@@ -126,6 +126,8 @@ toggles:AddToggle({ Name = "Simple toggle", Flag = "Demo_Simple",
 	Callback = function(on) notify("Toggle", on and "On" or "Off") end })
 toggles:AddToggle({ Name = "With a description", Description = "A grey second line under the name", Flag = "Demo_Desc" })
 toggles:AddToggle({ Name = "With a tooltip", Tooltip = "Hover the [?] to read this", Flag = "Demo_Tip" })
+-- Risky = true (or a reason) adds a red [!] and asks once before you switch it on by hand
+toggles:AddToggle({ Name = "Risky toggle", Risky = "The server could notice this one.", Flag = "Demo_Risky" })
 
 -- a toggle with a keybind (right-click the key box: Toggle / Hold / Always)
 toggles:AddToggle({ Name = "With a keybind", Flag = "Demo_Bind" })
@@ -155,7 +157,7 @@ toggles:AddToggle({ Name = "Disabled toggle", Disabled = true, Tooltip = "Greyed
 -- Sliders ------------------------------------------------------------------------------------
 local sliders = Basics:AddSection({ Name = "Sliders", Side = "Right" })
 sliders:AddSlider({ Name = "Whole numbers", Min = 0, Max = 100, Default = 50, Flag = "Demo_Slider",
-	Tooltip = "Click the number to type a value" })
+	Tooltip = "Click the number to type a value, or rest the mouse on the bar and use the wheel / arrow keys" })
 sliders:AddSlider({ Name = "Decimals", Min = 0, Max = 1, Increment = 0.05, Default = 0.35, Flag = "Demo_Decimal" })
 sliders:AddSlider({ Name = "With a suffix", Min = 0, Max = 360, Default = 90, Suffix = "°", Flag = "Demo_Angle" })
 sliders:AddRangeSlider({ Name = "Range", Min = 0, Max = 1000, Default = { 100, 600 }, Increment = 10, Suffix = "m",

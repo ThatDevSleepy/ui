@@ -95,3 +95,10 @@ Configs and themes are saved in `workspace/SleekUI/` with your executor's file f
 - **Custom cursor**: a small solid arrow in the theme's accent colour replaces the system pointer, only while the menu is open. Set `Library.CursorColor = Color3.new(0, 0, 0)` before `CreateWindow` for a fixed colour instead. Switch it off in Settings, with `Window:SetCursor(false)`, or with `Cursor = false` in `CreateWindow`.
 - **Scroll edge fades**: a page with more content above or below fades out softly at that edge instead of cutting rows off.
 - **Dim background**: the game darkens slightly while the menu is open. Switch it off in Settings, with `Window:SetDim(false)`, or with `Dim = false` in `CreateWindow`.
+- **Menu opacity**: a slider in Settings (or `Window:SetOpacity(0.6)`) makes the window and its cards see-through. Text and controls stay solid.
+- **Click ripple**: buttons and toggles pulse where you press them. Switch it off in Settings or with `Library.ClickRipple = false`.
+- **Slider wheel and arrows**: rest the mouse on a slider's bar, then the mouse wheel or the Left / Right arrows move it one step. The page holds still meanwhile, and a slider that only scrolls past under the mouse is left alone. Turn it off with `Library.SliderWheel = false`.
+- **Recent colours**: every colour picker shows the last 8 colours you picked by hand. Click one to use it again.
+- **Risky tag**: `Risky = true` (or `Risky = "why"`) on any element adds a red `[!]` after its name. A risky toggle asks once before you switch it on by hand; keybinds, configs and `:Set()` are never interrupted.
+- **Auto-save**: a switch on the Configs page (or `Library:SetAutoSave(true)`) writes your changes back into the config you last loaded or saved. Load your config after building the whole menu.
+- **Per-game configs**: right-click a config and pick "Autoload in this game" (or `Library:SetGameAutoload(name)`). `Library:LoadAutoload()` then loads that config in that game and the general autoload everywhere else.

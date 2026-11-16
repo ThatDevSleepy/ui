@@ -29,6 +29,7 @@
 	  Window:SetDim(bool)            darken the game behind the open menu (also a switch in Settings)
 	  Window:SetCursor(bool)         small arrow cursor in the accent color, only while the menu is open (Cursor = false in CreateWindow)
 	                                 Library.CursorColor = Color3.new(0, 0, 0) before CreateWindow for a fixed color instead
+	                                 Library.CursorLead = 1 draws it one frame ahead so it keeps up with the mouse (0 = off)
 	  search box in the top left (Ctrl+F) searches every page; click a result to jump to it
 	  click a section header to collapse it
 
@@ -3529,10 +3530,22 @@ function Library:_refreshCursor()
 		end
 		self._cursorFrame = cursor
 		-- follow the mouse; if the game switches its own pointer back on, hide it again
+		-- A drawn cursor reaches the screen about a frame after the real pointer moved, so it
+		-- trails behind. Drawing it where the mouse will be one frame from now (its last
+		-- movement added on) cancels that. Library.CursorLead = frames to lead by, 0 = off.
+		local last
 		connect(RunService.RenderStepped, function()
-			if not cursor.Visible then return end
+			if not cursor.Visible then last = nil return end
 			local m = mousePos()
-			cursor.Position = UDim2.fromOffset(m.X, m.Y)
+			local x, y = m.X, m.Y
+			local lead = tonumber(Library.CursorLead) or 1
+			if last and lead > 0 then
+				local dx, dy = (m.X - last.X) * lead, (m.Y - last.Y) * lead
+				-- a jump this large is a teleport (menu reopened, mouse recentred), not movement
+				if math.abs(dx) <= 80 and math.abs(dy) <= 80 then x, y = x + dx, y + dy end
+			end
+			last = m
+			cursor.Position = UDim2.fromOffset(math.floor(x + 0.5), math.floor(y + 0.5))
 			pcall(function()
 				if UserInputService.MouseIconEnabled then UserInputService.MouseIconEnabled = false end
 			end)
